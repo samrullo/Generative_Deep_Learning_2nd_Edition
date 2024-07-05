@@ -14,9 +14,9 @@ def display(
     """
     Displays n random images from each one of the supplied arrays.
     """
-    if images.max() > 1.0:
+    if round(images.max(),2) > 1.0:
         images = images / 255.0
-    elif images.min() < 0.0:
+    elif round(images.min(),2) < 0.0:
         images = (images + 1.0) / 2.0
 
     plt.figure(figsize=size)
