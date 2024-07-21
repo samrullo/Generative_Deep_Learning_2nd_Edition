@@ -18,7 +18,6 @@ NOISE_EMBEDDING_SIZE = 32
 PLOT_DIFFUSION_STEPS = 20
 
 # optimization
-EMA = 0.999
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
 EPOCHS = 50
@@ -52,7 +51,7 @@ class ResidualBlock(nn.Module):
             self.shortcut = nn.Conv2d(self.in_channels, self.n_channels, kernel_size=1)
         else:
             self.shortcut = nn.Identity()        
-        self.batch_norm = nn.BatchNorm2d(num_features=self.in_channels,affine=False)
+        self.batch_norm = nn.BatchNorm2d(num_features=self.in_channels,affine=True)
         self.conv1 = nn.Conv2d(in_channels=in_channels,out_channels=n_channels, kernel_size=3, padding=1, stride=1)
         self.swish = Swish()
         self.conv2 = nn.Conv2d(in_channels=n_channels, out_channels=n_channels, kernel_size=3, padding=1, stride=1)    
@@ -208,17 +207,11 @@ class DiffusionModel(nn.Module):
         self, in_channels, adapted_normalizer: Normalizer,device, *args, **kwargs
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.unet = Unet(in_channels,device)
-        self.ema_unet = Unet(in_channels,device)
+        self.unet = Unet(in_channels,device)        
         self.normalizer = adapted_normalizer
         self.device = device        
         self.diffusion_schedule = OffsetCosineDiffusionSchedule()
-        self.uniform_sample=UniformSample()
-        self.initialize_ema()
-    
-    def initialize_ema(self):
-        for param, ema_param in zip(self.unet.parameters(), self.ema_unet.parameters()):
-            ema_param.data = param.data.clone()
+        self.uniform_sample=UniformSample()        
     
     def denormalize(self,images):       
         images = self.normalizer.denormalize(images)
@@ -258,18 +251,10 @@ class DiffusionModel(nn.Module):
         generated_images = self.denormalize(generated_images)
         return generated_images
 
-    def predict_noises(self,noisy_images, noise_variances):
-        if self.training:
-            pred_noises = self.unet([noisy_images, noise_variances])
-        else:
-            pred_noises = self.ema_unet([noisy_images, noise_variances])
-        return pred_noises
+    def predict_noises(self,noisy_images, noise_variances):        
+        pred_noises = self.unet([noisy_images, noise_variances])
+        return pred_noises    
     
-    def update_ema(self):
-        with torch.no_grad():
-            for param, ema_param in zip(self.unet.parameters(),self.ema_unet.parameters()):
-                ema_param.data = EMA * ema_param.data + (1 - EMA) * param.data
-
     def forward(self, images, noises):        
         batch_size, n_channels, height, width = images.size()        
         diffusion_times = self.uniform_sample((batch_size, 1,1,1))
@@ -301,6 +286,7 @@ def convert_images_torch_to_numpy_for_display(images:torch.tensor):
 def training_loop(n_epochs, optimizer, model:DiffusionModel, loss_fn, train_loader,device,checkpoints_folder:pathlib.Path,images_folder:pathlib.Path):
     train_losses=[]
     min_train_loss = 1e8
+    ema = EMA(model,beta=0.995,update_every=10)
     for epoch in tqdm(range(n_epochs),desc="Epoch loop"):
         loss_train=0
         model.train()
@@ -319,15 +305,15 @@ def training_loop(n_epochs, optimizer, model:DiffusionModel, loss_fn, train_load
             optimizer.step()
             
             loss_train += loss.item()
-            model.update_ema()
+            ema.update()
         loss_train_avg = loss_train / len(train_loader)        
         if loss_train_avg <= min_train_loss:
-            torch.save(model.state_dict(),str(checkpoints_folder/f"ddm_torch_checkpoints_{epoch}.pt"))
+            torch.save(ema.state_dict(),str(checkpoints_folder/f"ddm_torch_checkpoints_{epoch}.pt"))
         min_train_loss = min(min_train_loss,loss_train_avg)        
         print(f"Epoch {epoch} train loss : {loss_train_avg}")        
-        model.eval()
-        with torch.no_grad():
-            generated_images = model.generate(10,20)
+        
+        with torch.inference_mode():
+            generated_images = ema.ema_model.generate(10,20)
             generated_images_np = convert_images_torch_to_numpy_for_display(generated_images)
             display(generated_images_np,save_to=str(images_folder))        
     return train_losses
