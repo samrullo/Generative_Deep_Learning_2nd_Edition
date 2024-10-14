@@ -179,8 +179,8 @@ class OffsetCosineDiffusionSchedule(nn.Module):
         super().__init__(*args, **kwargs)
         min_rate = 0.02
         max_rate = 0.95
-        self.start_angle = torch.arccos(torch.tensor(max_rate))
-        self.end_angle = torch.arccos(torch.tensor(min_rate))
+        self.start_angle = torch.arccos(torch.tensor(max_rate,requires_grad=False))
+        self.end_angle = torch.arccos(torch.tensor(min_rate,requires_grad=False))
         self.cosine=torch.cos
         self.sine=torch.sin
     
